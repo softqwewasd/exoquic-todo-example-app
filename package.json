@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@exoquic/browser-sdk": "file:../exoquic-browser-sdk",
+    "@exoquic/browser-sdk": "^0.1.0",
     "@radix-ui/react-slot": "^1.0.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.0.0",
@@ -28,6 +28,6 @@
     "postcss": "^8.5.4",
     "postcss-import": "^16.1.0",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5"
+    "typescript": "^4"
   }
 }
