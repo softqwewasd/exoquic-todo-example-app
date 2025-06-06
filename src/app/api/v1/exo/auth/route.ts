@@ -29,8 +29,8 @@ export async function POST(request: NextRequest) {
         'x-api-key': API_KEY
       },
       body: JSON.stringify({
-        "readableDestinations": "todos~(pending|completed|removed)",
-        "writableDestinations": "todos~(pending|completed|removed)"
+        "readableDestinations": "todos",
+        "writableDestinations": "todos"
       })
     });
     
