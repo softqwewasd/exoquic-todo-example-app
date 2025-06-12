@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Exoquic } from "@exoquic/browser-sdk";
 
 interface Todo {
@@ -10,10 +10,13 @@ interface Todo {
   createdAt: Date;
 }
 
-const exoquic = new Exoquic({
-  jwtProvider: async () => (await fetch("/api/v1/exo/auth", { method: "POST"})).text(),
-  url: "https://dev.exoquic.com/v3/connect"
-});
+interface ChatMessage {
+  id: number;
+  text: string;
+  username: string;
+  timestamp: Date;
+}
+
 
 function toggleTodoState(todos: Todo[], todoEvent: Todo): Todo[] {
   if (todoEvent.type == "removed") {
@@ -34,26 +37,62 @@ function toggleTodoState(todos: Todo[], todoEvent: Todo): Todo[] {
 const TodoApp = () => {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [newTodo, setNewTodo] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [username, setUsername] = useState('');
+  const exoquicRef = useRef<Exoquic | null>(null);
 
   useEffect(() => {
+    // Generate a random username only once
+    setUsername(`User${Math.floor(Math.random() * 1000)}`);
+  }, []);
+
+  useEffect(() => {
+    if (!username) return;
+
+    // Initialize exoquic instance
+    const exoquic = new Exoquic({
+      jwtProvider: async () => (await fetch("/api/v1/exo/auth", { method: "POST"})).text(),
+      url: "https://dev.exoquic.com/v3/connect"
+    });
+    
+    exoquicRef.current = exoquic;
+
     const initSubscriber = async () => {
       exoquic.subscribe(["todos"], (eventBatch: any) => {
         eventBatch.forEach((jsonEvent: string) => {
           const todoEvent: Todo = JSON.parse(jsonEvent);
           setTodos(currentTodos => toggleTodoState(currentTodos, todoEvent))
         })
-      })
+      });
+
+      exoquic.subscribe(["chat"], (eventBatch: any) => {
+        eventBatch.forEach((jsonEvent: string) => {
+          try {
+            let messageEvent: ChatMessage;
+            if (typeof jsonEvent === 'string') {
+              messageEvent = JSON.parse(jsonEvent);
+            } else {
+              messageEvent = jsonEvent;
+            }
+            setMessages(currentMessages => [...currentMessages, messageEvent]);
+          } catch (error) {
+            console.error('Error parsing chat message:', error, 'Raw event:', jsonEvent);
+          }
+        })
+      });
     }
 
     initSubscriber();
 
     return () => {
       exoquic.close();
+      exoquicRef.current = null;
     }
-  }, []);
+  }, [username]);
 
   const addTodo = () => {
-    if (newTodo.trim() === '') return;
+    if (newTodo.trim() === '' || !exoquicRef.current) return;
     
     const todo: Todo = {
       id: Date.now(),
@@ -61,36 +100,58 @@ const TodoApp = () => {
       type: "pending",
       createdAt: new Date()
     };
-    exoquic.publishJson("todos", todo);
+    exoquicRef.current.publishJson("todos", todo);
     setNewTodo('');
   };
 
   const toggleTodo = (id: number) => {
+    if (!exoquicRef.current) return;
     
     const toggledTodo = todos.find(todo => todo.id == id);
     if (!toggledTodo) return;
     
     if (toggledTodo.type == "pending") {
       toggledTodo.type = "completed";
-      exoquic.publishJson("todos", toggledTodo);
+      exoquicRef.current.publishJson("todos", toggledTodo);
     } else {
       toggledTodo.type = "pending"
-      exoquic.publishJson("todos", toggledTodo);
+      exoquicRef.current.publishJson("todos", toggledTodo);
     }
   };
 
   const deleteTodo = (id: number) => {
+    if (!exoquicRef.current) return;
     
     const todo = todos.find(todo => todo.id == id);
     if (!todo) return;
     
     todo.type = "removed"
-    exoquic.publishJson("todos", todo);
+    exoquicRef.current.publishJson("todos", todo);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       addTodo();
+    }
+  };
+
+  const sendMessage = () => {
+    if (newMessage.trim() === '' || !username || !exoquicRef.current) return;
+    
+    const message: ChatMessage = {
+      id: Date.now(),
+      text: newMessage.trim(),
+      username: username,
+      timestamp: new Date()
+    };
+    
+    exoquicRef.current.publishJson("chat", message);
+    setNewMessage('');
+  };
+
+  const handleChatKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      sendMessage();
     }
   };
 
@@ -164,6 +225,71 @@ const TodoApp = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
+        {/* Chat Section */}
+        <div style={cardStyle}>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '16px', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ width: '12px', height: '12px', backgroundColor: '#3b82f6', borderRadius: '50%' }}></div>
+            Chat ({username})
+          </h3>
+          
+          {/* Messages */}
+          <div style={{ 
+            height: '300px', 
+            overflowY: 'auto', 
+            backgroundColor: '#f9fafb', 
+            borderRadius: '8px', 
+            padding: '12px', 
+            marginBottom: '12px',
+            border: '1px solid #e5e7eb'
+          }}>
+            {messages.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px', color: '#6b7280' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '8px' }}>💬</div>
+                <p>No messages yet!</p>
+                <p style={{ fontSize: '14px' }}>Start a conversation with other users.</p>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div key={message.id} style={{ 
+                  marginBottom: '8px', 
+                  padding: '8px 12px', 
+                  backgroundColor: message.username === username ? '#dbeafe' : '#f3f4f6',
+                  borderRadius: '8px',
+                  borderLeft: message.username === username ? '3px solid #3b82f6' : '3px solid #6b7280'
+                }}>
+                  <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px' }}>
+                    {message.username} • {new Date(message.timestamp).toLocaleTimeString()}
+                  </div>
+                  <div style={{ color: '#374151' }}>{message.text}</div>
+                </div>
+              ))
+            )}
+          </div>
+          
+          {/* Message Input */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              placeholder="Type a message..."
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyPress={handleChatKeyPress}
+              style={{ ...inputStyle, fontSize: '14px' }}
+            />
+            <button 
+              onClick={sendMessage} 
+              style={{
+                ...buttonStyle,
+                backgroundColor: '#10b981',
+                padding: '8px 16px',
+                fontSize: '14px'
+              }}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+
         {/* Pending Todos */}
         <div style={cardStyle}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '16px', color: '#374151', display: 'flex', alignItems: 'center', gap: '8px' }}>

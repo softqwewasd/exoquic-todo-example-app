@@ -29,8 +29,8 @@ export async function POST(request: NextRequest) {
         'x-api-key': API_KEY
       },
       body: JSON.stringify({
-        "readableDestinations": "todos",
-        "writableDestinations": "todos"
+        "readableDestinations": "todos|chat",
+        "writableDestinations": "todos|chat"
       })
     });
     
