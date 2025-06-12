@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { Exoquic } from "@exoquic/browser-sdk";
+import { useNotifications } from './NotificationSystem';
 
 interface Todo {
   id: number;
@@ -14,6 +15,14 @@ interface ChatMessage {
   id: number;
   text: string;
   username: string;
+  timestamp: Date;
+}
+
+interface NotificationEvent {
+  type: 'success' | 'info' | 'warning';
+  title: string;
+  message: string;
+  fromUser: string;
   timestamp: Date;
 }
 
@@ -41,6 +50,8 @@ const TodoApp = () => {
   const [newMessage, setNewMessage] = useState('');
   const [username, setUsername] = useState('');
   const exoquicRef = useRef<Exoquic | null>(null);
+  const notificationExoquicRef = useRef<Exoquic | null>(null);
+  const { addNotification } = useNotifications();
 
   useEffect(() => {
     // Generate a random username only once
@@ -50,13 +61,21 @@ const TodoApp = () => {
   useEffect(() => {
     if (!username) return;
 
-    // Initialize exoquic instance
+    // Initialize main exoquic instance for todos and chat
     const exoquic = new Exoquic({
       jwtProvider: async () => (await fetch("/api/v1/exo/auth", { method: "POST"})).text(),
       url: "https://dev.exoquic.com/v3/connect"
     });
     
+    // Initialize separate exoquic instance for notifications (no caching)
+    const notificationExoquic = new Exoquic({
+      jwtProvider: async () => (await fetch("/api/v1/exo/auth", { method: "POST"})).text(),
+      url: "https://dev.exoquic.com/v3/connect",
+      cacheEnabled: false
+    });
+    
     exoquicRef.current = exoquic;
+    notificationExoquicRef.current = notificationExoquic;
 
     const initSubscriber = async () => {
       exoquic.subscribe(["todos"], (eventBatch: any) => {
@@ -81,15 +100,50 @@ const TodoApp = () => {
           }
         })
       });
+
+      // Subscribe to notifications channel using the no-cache instance
+      notificationExoquic.subscribe(["notifications"], (eventBatch: any) => {
+        eventBatch.forEach((jsonEvent: string) => {
+          try {
+            const notificationEvent: NotificationEvent = JSON.parse(jsonEvent);
+            // Only show notifications from other users
+            if (notificationEvent.fromUser !== username) {
+              addNotification({
+                type: notificationEvent.type,
+                title: notificationEvent.title,
+                message: notificationEvent.message
+              });
+            }
+          } catch (error) {
+            console.error('Error parsing notification event:', error);
+          }
+        });
+      });
     }
 
     initSubscriber();
 
     return () => {
       exoquic.close();
+      notificationExoquic.close();
       exoquicRef.current = null;
+      notificationExoquicRef.current = null;
     }
   }, [username]);
+
+  const sendNotification = (type: NotificationEvent['type'], title: string, message: string) => {
+    if (!notificationExoquicRef.current || !username) return;
+    
+    const notificationEvent: NotificationEvent = {
+      type,
+      title,
+      message,
+      fromUser: username,
+      timestamp: new Date()
+    };
+    
+    notificationExoquicRef.current.publishJson("notifications", notificationEvent);
+  };
 
   const addTodo = () => {
     if (newTodo.trim() === '' || !exoquicRef.current) return;
@@ -101,6 +155,10 @@ const TodoApp = () => {
       createdAt: new Date()
     };
     exoquicRef.current.publishJson("todos", todo);
+    
+    // Send notification
+    sendNotification('info', 'New Todo Added', `"${todo.text}" was added to the list`);
+    
     setNewTodo('');
   };
 
@@ -113,9 +171,15 @@ const TodoApp = () => {
     if (toggledTodo.type == "pending") {
       toggledTodo.type = "completed";
       exoquicRef.current.publishJson("todos", toggledTodo);
+      
+      // Send notification
+      sendNotification('success', 'Todo Completed', `"${toggledTodo.text}" was marked as complete`);
     } else {
       toggledTodo.type = "pending"
       exoquicRef.current.publishJson("todos", toggledTodo);
+      
+      // Send notification
+      sendNotification('warning', 'Todo Reopened', `"${toggledTodo.text}" was marked as pending`);
     }
   };
 
@@ -127,6 +191,9 @@ const TodoApp = () => {
     
     todo.type = "removed"
     exoquicRef.current.publishJson("todos", todo);
+    
+    // Send notification
+    sendNotification('warning', 'Todo Deleted', `"${todo.text}" was removed from the list`);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -146,6 +213,13 @@ const TodoApp = () => {
     };
     
     exoquicRef.current.publishJson("chat", message);
+    
+    // Send notification
+    const truncatedMessage = message.text.length > 50 ? 
+      message.text.substring(0, 50) + '...' : 
+      message.text;
+    sendNotification('info', `New message from ${username}`, truncatedMessage);
+    
     setNewMessage('');
   };
 
